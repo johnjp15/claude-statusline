@@ -89,11 +89,6 @@ def reset_time(epoch, with_day):
     return s
 
 
-# 2.345 -> 2.35%
-def pct2(p):
-    return fixed(p, 2) + '%'
-
-
 # API-equivalent cost: what the usage would cost on API billing. Nothing is billed,
 # so it is shown as an estimate (~$).
 def usd(n):
@@ -309,7 +304,7 @@ def render(j):
     own = []
     if me_path:
         p5 = five_spend['share'] if five_spend else 0.0
-        own.append(paint(heat(p5), pct2(p5)))
+        own.append(paint(heat(p5), fixed(p5, 1) + '%'))
     if has_cost:
         own.append(usd(cost))
     if own:
@@ -327,7 +322,7 @@ def render(j):
         parts.append(paint('1;97', 'session:') + ' ' + paint('92', '0.0%'))  # no active window means zero usage
 
     if live(seven):
-        parts.append(limit('week', seven, True, spent(seven_spend)))
+        parts.append(limit('week', seven, True, spent(seven_spend), 2))
 
     return paint('90', ' \u2502 ').join(parts)
 
