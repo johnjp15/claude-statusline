@@ -337,13 +337,14 @@ def render(j):
             return None
         return sp['all'] if sp else 0.0
 
+    # Claude Code reports window usage in whole percents, so it is shown without decimals.
     if live(five):
-        parts.append(limit(SESSION_ICON, SESSION_RAMP, five, False, spent(five_spend), 1))
+        parts.append(limit(SESSION_ICON, SESSION_RAMP, five, False, spent(five_spend)))
     else:
-        parts.append(paint('1;97', SESSION_ICON) + ' ' + paint(usage_heat(0, SESSION_RAMP), '0.0%'))  # no active window means zero usage
+        parts.append(paint('1;97', SESSION_ICON) + ' ' + paint(usage_heat(0, SESSION_RAMP), '0%'))  # no active window means zero usage
 
     if live(seven):
-        parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend), 2))
+        parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend)))
 
     return paint('90', ' \u2502 ').join(parts)
 
