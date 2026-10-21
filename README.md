@@ -28,7 +28,8 @@ git clone https://github.com/johnjp15/claude-statusline.git %USERPROFILE%\claude
 python %USERPROFILE%\claude-statusline\statusline.py --install
 ```
 
-`--install` sets `statusLine` in `~/.claude/settings.json` (a copy is kept as `settings.json.bak`). Restart Claude Code to see it.
+`--install` sets `statusLine` in `~/.claude/settings.json` (a copy is kept as `settings.json.bak`), including a 30-second
+`refreshInterval` so idle instances keep up with usage from other instances. Restart Claude Code to see it.
 
 Update with `git pull`; no reinstall needed.
 

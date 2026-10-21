@@ -328,7 +328,11 @@ def render(j):
 
 
 def install():
-    """Point ~/.claude/settings.json's statusLine at this file, keeping a .bak copy."""
+    """Point ~/.claude/settings.json's statusLine at this file, keeping a .bak copy.
+
+    Also sets a 30s refreshInterval unless one is set, so idle instances pick up
+    usage from busier ones.
+    """
     settings = os.path.join(HOME, '.claude', 'settings.json')
     data = {}
     if os.path.exists(settings):
@@ -342,6 +346,7 @@ def install():
         cmd = 'python3 "%s"' % script
     line = data.get('statusLine') if isinstance(data.get('statusLine'), dict) else {}
     line.update(type='command', command=cmd)
+    line.setdefault('refreshInterval', 30)
     data['statusLine'] = line
     os.makedirs(os.path.dirname(settings), exist_ok=True)
     tmp = settings + '.tmp'
