@@ -3,11 +3,14 @@
 A [Claude Code](https://claude.com/claude-code) status line for macOS, Linux and Windows (any shell: bash, zsh, fish, PowerShell, cmd).
 
 ```
-~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ inst: 7.68% · ~$3.00 │ session: 16.0% · resets 12:59pm · ~$6.25 │ week: 23% · resets Fri 9:59am · ~$6.25
+~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 7.7% · 3.84% · ~$3.00 │ ⏳ 16.0% · ~$6.25 · ↻ 12:59pm │ 📅 23.00% · ~$6.25 · ↻ Fri 9:59am
 ```
 
-- **inst:** this Claude Code instance's share of the session usage, and its API-equivalent cost.
-- **session / week:** account-wide usage, reset time, and API-equivalent cost of all instances on this machine.
+- **💬 this instance:** its share of the session usage and of the week usage, and its API-equivalent cost.
+- **⏳ session / 📅 week:** account-wide usage, API-equivalent cost of all instances on this machine, and reset time (↻).
+- Each percentage is colored by its own value every 20%: session numbers run turquoise → teal → rose → coral → red,
+  week numbers lavender → orchid → magenta → pink → red. The instance's two shares use the same scales, so color tells
+  you which window each one belongs to.
 - `~$` amounts are what the usage would cost on API billing. Nothing is billed on a subscription.
 
 ## Install

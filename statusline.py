@@ -62,6 +62,16 @@ def heat(pct):
     return '92'
 
 
+# Usage windows step through their own ramp every 20%, ending in red, so session and
+# week stay apart while both warn as they fill. Green is kept for costs.
+SESSION_RAMP = (80, 73, 168, 203, 196)  # turquoise to red through rose
+WEEK_RAMP = (183, 177, 170, 205, 197)  # lavender to red through orchid and magenta
+
+
+def usage_heat(pct, ramp):
+    return '38;5;%d' % ramp[min(4, int(max(0.0, pct) // 20))]
+
+
 def bar(pct):
     n = min(10, max(0, int(math.floor(pct / 10 + 0.5))))
     return paint(heat(pct), '\u2588' * n) + paint('90', '\u2591' * (10 - n))
@@ -92,18 +102,25 @@ def reset_time(epoch, with_day):
 # API-equivalent cost: what the usage would cost on API billing. Nothing is billed,
 # so it is shown as an estimate (~$).
 def usd(n):
-    return paint('96', '~$' + fixed(n, 0 if n >= 100 else 2))
+    return paint('92', '~$' + fixed(n, 0 if n >= 100 else 2))
 
 
-# One usage window: its usage %, when it resets, and the API-equivalent spend in it if known.
-def limit(label, window, with_day, spent, places=0):
+# Segment icons: this instance (its conversation), the 5-hour session window (an hourglass), the week (a calendar).
+# All are emoji by default; ones that need VS16 to become emoji throw off terminal width.
+INST_ICON = '\U0001f4ac'
+SESSION_ICON = '\u23f3'
+WEEK_ICON = '\U0001f4c5'
+
+
+# One usage window: its usage %, the API-equivalent spend in it if known, and when it resets.
+def limit(label, ramp, window, with_day, spent, places=0):
     pct = num(window['used_percentage'])
-    f = [paint(heat(pct), fixed(pct, places) + '%')]
-    if window.get('resets_at') is not None:
-        f.append(paint('90', 'resets ' + reset_time(window['resets_at'], with_day)))
+    f = [paint(usage_heat(pct, ramp), fixed(pct, places) + '%')]
     if spent is not None:
         f.append(usd(spent))
-    return paint('1;97', label + ':') + ' ' + DOT.join(f)
+    if window.get('resets_at') is not None:
+        f.append(paint('90', '\u21bb ' + reset_time(window['resets_at'], with_day)))
+    return paint('1;97', label) + ' ' + DOT.join(f)
 
 
 def load(path):
@@ -299,16 +316,20 @@ def render(j):
             pass
         save(me_path, state)
 
-    # This instance: its share of the session window's usage, and its API-equivalent cost.
+    # This instance: its share of the session and week usage, and its API-equivalent cost.
+    # Each share is colored on its own window's ramp.
     has_cost = get(j, 'cost', 'total_cost_usd') is not None
     own = []
     if me_path:
         p5 = five_spend['share'] if five_spend else 0.0
-        own.append(paint(heat(p5), fixed(p5, 1) + '%'))
+        own.append(paint(usage_heat(p5, SESSION_RAMP), fixed(p5, 1) + '%'))
+        if seven_spend:
+            p7 = seven_spend['share']
+            own.append(paint(usage_heat(p7, WEEK_RAMP), fixed(p7, 2) + '%'))
     if has_cost:
         own.append(usd(cost))
     if own:
-        parts.append(paint('1;97', 'inst:') + ' ' + DOT.join(own))
+        parts.append(paint('1;97', INST_ICON) + ' ' + DOT.join(own))
 
     # Account-wide windows, with what all instances here spent in each.
     def spent(sp):
@@ -317,12 +338,12 @@ def render(j):
         return sp['all'] if sp else 0.0
 
     if live(five):
-        parts.append(limit('session', five, False, spent(five_spend), 1))
+        parts.append(limit(SESSION_ICON, SESSION_RAMP, five, False, spent(five_spend), 1))
     else:
-        parts.append(paint('1;97', 'session:') + ' ' + paint('92', '0.0%'))  # no active window means zero usage
+        parts.append(paint('1;97', SESSION_ICON) + ' ' + paint(usage_heat(0, SESSION_RAMP), '0.0%'))  # no active window means zero usage
 
     if live(seven):
-        parts.append(limit('week', seven, True, spent(seven_spend), 2))
+        parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend), 2))
 
     return paint('90', ' \u2502 ').join(parts)
 
