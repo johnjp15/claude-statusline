@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Claude Code status line.
 
-Shows the folder, session title, model and effort, context use, this instance's
-share of the session usage, and session and weekly usage with reset times and
-API-equivalent cost. Reads the status JSON on stdin.
+Shows the folder and git branch, session title, model and effort, context use,
+lines changed and session duration, then this instance's share of the session
+usage, and session and weekly usage with reset times and API-equivalent cost.
+Reads the status JSON on stdin.
 
 Works with Python 3.8+ on macOS, Linux and Windows. Run
 `python3 statusline.py --install` to point ~/.claude/settings.json at this file.
@@ -15,6 +16,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -99,6 +101,17 @@ def reset_time(epoch, with_day):
     return s
 
 
+# 45000 -> 45s, 750000 -> 12m, 4320000 -> 1h12m
+def duration(ms):
+    s = int(num(ms) // 1000)
+    if s < 60:
+        return '%ds' % s
+    m = s // 60
+    if m < 60:
+        return '%dm' % m
+    return '%dh%02dm' % (m // 60, m % 60)
+
+
 # API-equivalent cost: what the usage would cost on API billing. Nothing is billed,
 # so it is shown as an estimate (~$).
 def usd(n):
@@ -160,16 +173,47 @@ def blurb(j):
     return json.loads(hits[-1]) if hits else None
 
 
+# Git branch of a folder, with * when the working tree has changes; None outside
+# a repo. A detached HEAD shows its short commit id.
+def git_branch(folder):
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS='0')  # don't take index locks a running git might need
+    try:
+        r = subprocess.run(['git', '-C', folder, 'status', '--porcelain=v2', '--branch'],
+                           capture_output=True, timeout=2, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode:
+        return None
+    head = oid = None
+    dirty = False
+    for line in r.stdout.decode('utf-8', 'ignore').splitlines():
+        if line.startswith('# branch.head '):
+            head = line[len('# branch.head '):]
+        elif line.startswith('# branch.oid '):
+            oid = line[len('# branch.oid '):]
+        elif not line.startswith('#'):
+            dirty = True
+    if head == '(detached)':
+        head = oid[:7] if oid and oid != '(initial)' else None
+    if not head:
+        return None
+    return head + ('*' if dirty else '')
+
+
 def render(j):
     parts = []
 
     folder = get(j, 'workspace', 'current_dir') or j.get('cwd')
     if folder:
         folder = str(folder)
+        branch = git_branch(folder)
         same = folder.lower().startswith(HOME.lower()) if os.name == 'nt' else folder.startswith(HOME)
         if same:
             folder = '~' + folder[len(HOME):]
-        parts.append(paint('1;94', folder))
+        f = paint('1;94', folder)
+        if branch:
+            f += ' ' + paint('35', '(' + branch + ')')
+        parts.append(f)
 
     try:
         b = blurb(j)
@@ -203,6 +247,15 @@ def render(j):
                 used = num(size) * num(ctx_pct) / 100
             ctx += ' ' + paint(heat(pct), tokens(used)) + paint('90', '/' + tokens(size))
         parts.append(ctx + ' ' + paint(heat(pct), '%d%%' % pct))
+
+    added = get(j, 'cost', 'total_lines_added')
+    removed = get(j, 'cost', 'total_lines_removed')
+    if added is not None or removed is not None:
+        parts.append(paint('92', '+%d' % num(added)) + ' ' + paint('91', '−%d' % num(removed)))
+
+    ms = get(j, 'cost', 'total_duration_ms')
+    if ms is not None:
+        parts.append(paint('37', duration(ms)))
 
     # Usage is account-wide, but each instance only knows the numbers from its own
     # last API response. Instances share the newest numbers through a small cache
@@ -328,6 +381,8 @@ def render(j):
             own.append(paint(usage_heat(p7, WEEK_RAMP), fixed(p7, 2) + '%'))
     if has_cost:
         own.append(usd(cost))
+    line1 = parts
+    parts = []
     if own:
         parts.append(paint('1;97', INST_ICON) + ' ' + DOT.join(own))
 
@@ -346,7 +401,8 @@ def render(j):
     if live(seven):
         parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend)))
 
-    return paint('90', ' \u2502 ').join(parts)
+    sep = paint('90', ' \u2502 ')
+    return sep.join(line1) + '\n' + sep.join(parts)
 
 
 def install():
