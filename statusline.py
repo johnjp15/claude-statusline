@@ -374,23 +374,30 @@ def render(j):
 
     # Each instance also keeps its own file under statusline-sessions: its
     # API-equivalent cost, that cost when each usage window began, and when its
-    # usage numbers last changed.
+    # numbers for each window last changed.
     sess_dir = os.path.join(os.path.dirname(cache_path), 'statusline-sessions')
     sid = str(j.get('session_id') or '')
     me_path = os.path.join(sess_dir, sid + '.json') if re.match(r'^[\w-]+$', sid) else None
     me = (load(me_path) if me_path else None) or {}
     cost = num(get(j, 'cost', 'total_cost_usd'))
 
-    # An instance's numbers count as observed when they last changed, so an idle
-    # instance's old numbers lose to a busier instance's newer ones.
+    # A window's numbers count as observed when this instance's numbers for it last
+    # changed, so an idle instance's old numbers lose to a busier instance's newer
+    # ones. Windows are tracked apart: Claude Code drops a window once it resets,
+    # and that must not make the other window's old numbers look new.
     rate_limits = j.get('rate_limits')
-    sig = json.dumps(rate_limits, sort_keys=True, separators=(',', ':'))
-    observed = int(num(me.get('observed'))) if me.get('sig') == sig else now
+    seen = me.get('obs') if isinstance(me.get('obs'), dict) else {}
+    obs = {}
 
-    def reading(w):
-        if live(w):
-            return {'used_percentage': num(w['used_percentage']), 'resets_at': int(num(w['resets_at'])), 'observed': observed}
-        return None
+    def reading(key):
+        w = get(rate_limits, key)
+        if not live(w):
+            return None
+        pct, at = num(w['used_percentage']), int(num(w['resets_at']))
+        e = seen.get(key)
+        same = isinstance(e, dict) and num(e.get('pct')) == pct and int(num(e.get('at'))) == at
+        obs[key] = {'pct': pct, 'at': at, 't': int(num(e['t'])) if same else now}
+        return {'used_percentage': pct, 'resets_at': at, 'observed': obs[key]['t']}
 
     # Newer of two readings: the later window wins, else the later-observed reading.
     def newer(a, b):
@@ -408,8 +415,8 @@ def render(j):
     cache = load(cache_path)
     if not isinstance(cache, dict):
         cache = {}
-    five = newer(reading(get(rate_limits, 'five_hour')), cache.get('five_hour'))
-    seven = newer(reading(get(rate_limits, 'seven_day')), cache.get('seven_day'))
+    five = newer(reading('five_hour'), cache.get('five_hour'))
+    seven = newer(reading('seven_day'), cache.get('seven_day'))
 
     merged = {}
     for key, w in (('five_hour', five), ('seven_day', seven)):
@@ -461,7 +468,7 @@ def render(j):
 
     five_spend = seven_spend = None
     if me_path:
-        state = {'cost': cost, 'seen': now, 'sig': sig, 'observed': observed}
+        state = {'cost': cost, 'seen': now, 'obs': obs}
         if live(five):
             five_spend = spend('five_hour', five)
             state['five_hour'] = {'at': int(num(five['resets_at'])), 'base': five_spend['base']}
