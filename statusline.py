@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Claude Code status line.
 
-Shows the folder and git branch, session title, model and effort, context use,
-lines changed and session duration, then this instance's share of the session
-usage, and session and weekly usage with reset times and API-equivalent cost.
+Shows the folder and git branch, session title, model and effort, context use
+(with a /compact nudge), prompt cache hit ratio, time until it goes cold and miss
+causes, uncommitted lines changed and session duration, then this instance's
+share of the session usage, and session and weekly usage with reset times and
+API-equivalent cost, plus the weekly pace.
 Reads the status JSON on stdin.
 
 Works with Python 3.8+ on macOS, Linux and Windows. Run
@@ -125,10 +127,29 @@ SESSION_ICON = '\u23f3'
 WEEK_ICON = '\U0001f4c5'
 
 
-# One usage window: its usage %, the API-equivalent spend in it if known, and when it resets.
-def limit(label, ramp, window, with_day, spent, places=0):
+# Where a window's usage is headed: the % at reset if the pace so far holds, or
+# when it would hit 100% if that comes first. Skipped early in the window, when
+# there is too little to go on.
+def pace(window, length, ramp, with_day):
+    used = num(window['used_percentage'])
+    start = num(window['resets_at']) - length
+    elapsed = time.time() - start
+    if not 0 < used < 100 or elapsed < length / 20:
+        return None
+    proj = used * length / elapsed
+    if proj >= 100:
+        return paint(usage_heat(100, ramp), 'hits 100% ~' + reset_time(start + elapsed * 100 / used, with_day))
+    return paint(usage_heat(proj, ramp), 'pace ' + fixed(proj) + '%')
+
+
+# One usage window: its usage %, pace if the window's length is given, the
+# API-equivalent spend in it if known, and when it resets.
+def limit(label, ramp, window, with_day, spent, places=0, length=None):
     pct = num(window['used_percentage'])
     f = [paint(usage_heat(pct, ramp), fixed(pct, places) + '%')]
+    p = pace(window, length, ramp, with_day) if length else None
+    if p:
+        f.append(p)
     if spent is not None:
         f.append(usd(spent))
     if window.get('resets_at') is not None:
@@ -173,46 +194,103 @@ def blurb(j):
     return json.loads(hits[-1]) if hits else None
 
 
-# Git branch of a folder, with * when the working tree has changes; None outside
-# a repo. A detached HEAD shows its short commit id.
-def git_branch(folder):
+EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'  # git's id for an empty tree
+
+
+# Git state of a folder, or None outside a repo: the branch with * when the
+# working tree has changes (a detached HEAD shows its short commit id), and the
+# lines added and removed by uncommitted changes, untracked files included.
+def git_state(folder):
     env = dict(os.environ, GIT_OPTIONAL_LOCKS='0')  # don't take index locks a running git might need
+
+    def git(*args):
+        r = subprocess.run(['git', '-C', folder] + list(args), capture_output=True, timeout=2, env=env)
+        return r.stdout.decode('utf-8', 'ignore') if r.returncode == 0 else None
+
     try:
-        r = subprocess.run(['git', '-C', folder, 'status', '--porcelain=v2', '--branch'],
-                           capture_output=True, timeout=2, env=env)
-    except (OSError, subprocess.SubprocessError):
+        out = git('status', '--porcelain=v2', '--branch', '--untracked-files=all', '-z')
+        if out is None:
+            return None
+        head = oid = None
+        changed = False
+        untracked = []
+        for e in out.split('\0'):
+            if e.startswith('# branch.head '):
+                head = e[len('# branch.head '):]
+            elif e.startswith('# branch.oid '):
+                oid = e[len('# branch.oid '):]
+            elif e.startswith('? '):
+                untracked.append(e[2:])
+            elif e and not e.startswith('#'):
+                changed = True
+        initial = not oid or oid == '(initial)'
+        if head == '(detached)':
+            head = None if initial else oid[:7]
+        if not head:
+            return None
+
+        added = removed = 0
+        if changed:
+            for line in (git('diff', EMPTY_TREE if initial else 'HEAD', '--numstat') or '').splitlines():
+                a, r, _ = line.split('\t', 2)
+                if a != '-':  # binary files show - for both counts
+                    added += int(a)
+                    removed += int(r)
+        # Untracked files count as all added. Paths are relative to the repo root;
+        # binary and large files are skipped.
+        root = (git('rev-parse', '--show-toplevel') or '').strip() if untracked else ''
+        for path in untracked[:200] if root else []:
+            p = os.path.join(root, path)
+            try:
+                if os.path.getsize(p) > 1024 * 1024:
+                    continue
+                with open(p, 'rb') as fh:
+                    data = fh.read()
+            except OSError:
+                continue
+            if b'\0' not in data:
+                added += data.count(b'\n') + (1 if data and not data.endswith(b'\n') else 0)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    if r.returncode:
-        return None
-    head = oid = None
-    dirty = False
-    for line in r.stdout.decode('utf-8', 'ignore').splitlines():
-        if line.startswith('# branch.head '):
-            head = line[len('# branch.head '):]
-        elif line.startswith('# branch.oid '):
-            oid = line[len('# branch.oid '):]
-        elif not line.startswith('#'):
-            dirty = True
-    if head == '(detached)':
-        head = oid[:7] if oid and oid != '(initial)' else None
-    if not head:
-        return None
-    return head + ('*' if dirty else '')
+    dirty = changed or bool(untracked)
+    return {'branch': head + ('*' if dirty else ''), 'added': added, 'removed': removed}
+
+
+# Short names for the likely cache-miss causes Claude Code reports.
+CAUSES = {'tools_changed': 'tools changed', 'system_prompt_changed': 'system prompt changed',
+          'ttl_expired_5m': '5m TTL expired', 'likely_server_side': 'server side'}
+
+
+# The session's cache-miss causes, most frequent first, e.g. "tools changed ×2,
+# server side". Older Claude Code versions report only the last miss's causes.
+def miss_causes(pc):
+    counts = pc.get('miss_causes')
+    if not isinstance(counts, dict) or not counts:
+        last = get(pc, 'last_miss_cause', 'causes')
+        counts = dict.fromkeys(last, 1) if isinstance(last, list) else {}
+    out = []
+    for k, n in sorted(counts.items(), key=lambda kv: -num(kv[1])):
+        s = CAUSES.get(k, str(k).replace('_', ' '))
+        if num(n) > 1:
+            s += ' ×%d' % num(n)
+        out.append(s)
+    return ', '.join(out)
 
 
 def render(j):
     parts = []
 
+    g = None
     folder = get(j, 'workspace', 'current_dir') or j.get('cwd')
     if folder:
         folder = str(folder)
-        branch = git_branch(folder)
+        g = git_state(folder)
         same = folder.lower().startswith(HOME.lower()) if os.name == 'nt' else folder.startswith(HOME)
         if same:
             folder = '~' + folder[len(HOME):]
         f = paint('1;94', folder)
-        if branch:
-            f += ' ' + paint('35', '(' + branch + ')')
+        if g:
+            f += ' ' + paint('35', '(' + g['branch'] + ')')
         parts.append(f)
 
     try:
@@ -246,12 +324,39 @@ def render(j):
             else:
                 used = num(size) * num(ctx_pct) / 100
             ctx += ' ' + paint(heat(pct), tokens(used)) + paint('90', '/' + tokens(size))
-        parts.append(ctx + ' ' + paint(heat(pct), '%d%%' % pct))
+        ctx += ' ' + paint(heat(pct), '%d%%' % pct)
+        if pct >= 70:  # compact by choice before auto-compact does it mid-task
+            ctx += ' ' + paint(heat(pct), '→ /compact')
+        parts.append(ctx)
 
-    added = get(j, 'cost', 'total_lines_added')
-    removed = get(j, 'cost', 'total_lines_removed')
-    if added is not None or removed is not None:
-        parts.append(paint('92', '+%d' % num(added)) + ' ' + paint('91', '−%d' % num(removed)))
+    # Prompt cache: the session's hit ratio, time until the cache goes cold (the
+    # next message then re-caches the context at full price), and misses.
+    pc = j.get('prompt_cache')
+    if isinstance(pc, dict) and pc.get('caching_observed'):
+        c = []
+        if pc.get('hit_ratio') is not None:
+            h = num(pc['hit_ratio']) * 100
+            c.append(paint('92' if h >= 80 else '93' if h >= 50 else '91', fixed(h) + '%'))
+        left = num(pc['expires_at']) - time.time() if pc.get('expires_at') is not None else 0
+        if left > 0:
+            frac = left / (3600 if pc.get('ttl') == '1h' else 300)
+            c.append(paint('92' if frac > 1 / 3 else '93' if frac > 1 / 12 else '91',
+                           'warm ' + ('%dm' % (left // 60) if left >= 60 else '%ds' % left)))
+        else:
+            c.append(paint('91', 'cold'))
+            if pc.get('recache_tokens_if_cold'):
+                c.append(paint('91', 'recache ' + tokens(pc['recache_tokens_if_cold'])))
+        misses = int(num(pc.get('misses')))
+        if misses:
+            m = '%d miss%s' % (misses, '' if misses == 1 else 'es')
+            why = miss_causes(pc)
+            if why:
+                m += ' (' + why + ')'
+            c.append(paint('93', m))
+        parts.append(paint('90', 'cache') + ' ' + DOT.join(c))
+
+    if g and (g['added'] or g['removed']):
+        parts.append(paint('92', '+%d' % g['added']) + ' ' + paint('91', '−%d' % g['removed']))
 
     ms = get(j, 'cost', 'total_duration_ms')
     if ms is not None:
@@ -399,7 +504,7 @@ def render(j):
         parts.append(paint('1;97', SESSION_ICON) + ' ' + paint(usage_heat(0, SESSION_RAMP), '0%'))  # no active window means zero usage
 
     if live(seven):
-        parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend)))
+        parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend), length=7 * 86400))
 
     sep = paint('90', ' \u2502 ')
     return sep.join(line1) + '\n' + sep.join(parts)
