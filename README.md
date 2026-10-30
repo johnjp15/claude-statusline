@@ -8,7 +8,14 @@ A [Claude Code](https://claude.com/claude-code) status line for macOS, Linux and
 
 - **💬 this instance:** its share of the session usage and of the week usage, and its API-equivalent cost.
 - **⏳ session / 📅 week:** account-wide usage, API-equivalent cost of all instances on this machine, and reset time (↻).
-  Claude Code reports these in whole percents.
+  Claude Code reports these in whole percents. On plans without a session limit (Ultra), there is no 5-hour window,
+  so ⏳ and the instance's session share are left out:
+
+  ```
+  ~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 3.84% · ~$3.00 │ 📅 23% · ~$6.25 · ↻ Fri 9:59am
+  ```
+
+  On plans with one, ⏳ is also hidden between a reset and your next message.
 - Each percentage is colored by its own value every 20%: session numbers run turquoise → teal → rose → coral → red,
   week numbers lavender → orchid → magenta → pink → red. The instance's two shares use the same scales, so color tells
   you which window each one belongs to.
