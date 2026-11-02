@@ -5,7 +5,8 @@ Shows the folder and git branch, session title, model and effort, context use
 (with a /compact nudge), prompt cache hit ratio, time until it goes cold and miss
 causes, uncommitted lines changed and session duration, then this instance's
 share of the session usage, and session and weekly usage with reset times and
-API-equivalent cost, plus the weekly pace.
+API-equivalent cost, plus the weekly pace. The session parts are left out when
+there is no 5-hour window (plans without a session limit, such as Ultra).
 Reads the status JSON on stdin.
 
 Works with Python 3.8+ on macOS, Linux and Windows. Run
@@ -486,8 +487,9 @@ def render(j):
     has_cost = get(j, 'cost', 'total_cost_usd') is not None
     own = []
     if me_path:
-        p5 = five_spend['share'] if five_spend else 0.0
-        own.append(paint(usage_heat(p5, SESSION_RAMP), fixed(p5, 1) + '%'))
+        if five_spend:
+            p5 = five_spend['share']
+            own.append(paint(usage_heat(p5, SESSION_RAMP), fixed(p5, 1) + '%'))
         if seven_spend:
             p7 = seven_spend['share']
             own.append(paint(usage_heat(p7, WEEK_RAMP), fixed(p7, 2) + '%'))
@@ -505,10 +507,11 @@ def render(j):
         return sp['all'] if sp else 0.0
 
     # Claude Code reports window usage in whole percents, so it is shown without decimals.
+    # Plans without a session limit (Ultra) get no five_hour window, so the session
+    # segment only appears while a window is live. On plans that have one, it is
+    # hidden between a reset and the next message, when usage would be 0%.
     if live(five):
         parts.append(limit(SESSION_ICON, SESSION_RAMP, five, False, spent(five_spend)))
-    else:
-        parts.append(paint('1;97', SESSION_ICON) + ' ' + paint(usage_heat(0, SESSION_RAMP), '0%'))  # no active window means zero usage
 
     if live(seven):
         parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend), length=7 * 86400))
