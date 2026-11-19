@@ -462,9 +462,11 @@ def render(j):
     def spend(key, w):
         pct = num(w['used_percentage'])
         e = me.get(key)
-        if same_window(e, w):
+        if same_window(e, w) and 'p0' in e:
             base = num(e.get('base')) - shift
-            p0 = num(e.get('p0', pct))
+            p0 = num(e['p0'])
+        elif same_window(e, w):  # tracked before p0 existed: start counting now
+            base, p0 = prev, pct
         else:
             base = prev
             p0 = 0.0 if me.get('seen') else pct
@@ -473,9 +475,9 @@ def render(j):
         start = p0
         for s in others:
             o = s.get(key)
-            if same_window(o, w):
+            if same_window(o, w) and 'p0' in o:
                 total += num(s.get('cost')) - num(o.get('base'))
-                start = min(start, num(o.get('p0', pct)))
+                start = min(start, num(o['p0']))
         grown = max(0.0, pct - start)
         share = grown * mine / total if total > 0 else 0.0
         return {'base': base, 'p0': p0, 'all': total, 'share': share}
