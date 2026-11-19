@@ -3,7 +3,7 @@
 A [Claude Code](https://claude.com/claude-code) status line for macOS, Linux and Windows (any shell: bash, zsh, fish, PowerShell, cmd).
 
 ```
-~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 7.7% · 3.84% · ~$3.00 │ ⏳ 16% · ~$6.25 · ↻ 12:59pm │ 📅 23% · ~$6.25 · ↻ Fri 9:59am
+~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 7.7% · 3.8% · ~$3.00 │ ⏳ 16% · ~$6.25 · ↻ 12:59pm │ 📅 23% · ~$6.25 · ↻ Fri 9:59am
 ```
 
 - **💬 this instance:** its share of the session usage and of the week usage, and its API-equivalent cost.
@@ -12,7 +12,7 @@ A [Claude Code](https://claude.com/claude-code) status line for macOS, Linux and
   so ⏳ and the instance's session share are left out:
 
   ```
-  ~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 3.84% · ~$3.00 │ 📅 23% · ~$6.25 · ↻ Fri 9:59am
+  ~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 3.8% · ~$3.00 │ 📅 23% · ~$6.25 · ↻ Fri 9:59am
   ```
 
   On plans with one, ⏳ is also hidden between a reset and your next message.
@@ -48,5 +48,6 @@ Update with `git pull`; no reinstall needed.
 
 Usage limits are account-wide, so each instance writes its API-equivalent cost to
 `~/.claude/statusline-sessions/<session id>.json`. An instance's share of the session usage is
-its share of the cost all instances on this machine spent in that window. Usage from claude.ai or
+its share of the cost all instances on this machine spent in that window, applied to how much
+the window's usage grew while they were running (usage from before they started isn't counted). Usage from claude.ai or
 other machines is counted toward the instances here, so shares are estimates.

@@ -455,27 +455,40 @@ def render(j):
     def same_window(e, w):
         return isinstance(e, dict) and abs(num(e.get('at')) - num(w['resets_at'])) <= 60
 
+    # Only usage that grew while instances here were tracked is shared out, so usage
+    # from before they started (or before this fix) isn't pinned on them. p0 is the
+    # window's % when an instance first saw it: 0 for a window that began while the
+    # instance was already running, since its base cost is then from the window start.
     def spend(key, w):
+        pct = num(w['used_percentage'])
         e = me.get(key)
-        base = num(e.get('base')) - shift if same_window(e, w) else prev
+        if same_window(e, w):
+            base = num(e.get('base')) - shift
+            p0 = num(e.get('p0', pct))
+        else:
+            base = prev
+            p0 = 0.0 if me.get('seen') else pct
         mine = cost - base
         total = mine
+        start = p0
         for s in others:
             o = s.get(key)
             if same_window(o, w):
                 total += num(s.get('cost')) - num(o.get('base'))
-        share = num(w['used_percentage']) * mine / total if total > 0 else 0.0
-        return {'base': base, 'all': total, 'share': share}
+                start = min(start, num(o.get('p0', pct)))
+        grown = max(0.0, pct - start)
+        share = grown * mine / total if total > 0 else 0.0
+        return {'base': base, 'p0': p0, 'all': total, 'share': share}
 
     five_spend = seven_spend = None
     if me_path:
         state = {'cost': cost, 'seen': now, 'obs': obs}
         if live(five):
             five_spend = spend('five_hour', five)
-            state['five_hour'] = {'at': int(num(five['resets_at'])), 'base': five_spend['base']}
+            state['five_hour'] = {'at': int(num(five['resets_at'])), 'base': five_spend['base'], 'p0': five_spend['p0']}
         if live(seven):
             seven_spend = spend('seven_day', seven)
-            state['seven_day'] = {'at': int(num(seven['resets_at'])), 'base': seven_spend['base']}
+            state['seven_day'] = {'at': int(num(seven['resets_at'])), 'base': seven_spend['base'], 'p0': seven_spend['p0']}
         try:
             os.makedirs(sess_dir, exist_ok=True)
         except OSError:
@@ -492,7 +505,7 @@ def render(j):
             own.append(paint(usage_heat(p5, SESSION_RAMP), fixed(p5, 1) + '%'))
         if seven_spend:
             p7 = seven_spend['share']
-            own.append(paint(usage_heat(p7, WEEK_RAMP), fixed(p7, 2) + '%'))
+            own.append(paint(usage_heat(p7, WEEK_RAMP), fixed(p7, 1) + '%'))
     if has_cost:
         own.append(usd(cost))
     line1 = parts
