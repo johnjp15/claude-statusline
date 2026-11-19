@@ -12,10 +12,14 @@ A [Claude Code](https://claude.com/claude-code) status line for macOS, Linux and
   so ⏳ and the instance's session share are left out:
 
   ```
-  ~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 3.8% · ~$3.00 │ 📅 23% · ~$6.25 · ↻ Fri 9:59am
+  ~/proj │ Fix the login bug │ Opus 5.5 high │ ctx █░░░░░░░░░ 83k/1M 8% │ 💬 3.8% · ~$3.00 │ 📅 23% · ~$6.25 · ↻ Fri 9:59am │ Fable 4%
   ```
 
   On plans with one, ⏳ is also hidden between a reset and your next message.
+- **Fable** (and any other per-model weekly limit on your plan): usage of that model's own allowance.
+  These come from the same endpoint as Claude Code's `/usage` screen, which the script calls in the background
+  about once a minute with Claude Code's login token. That endpoint also counts claude.ai and Cowork usage right away,
+  so ⏳ and 📅 keep up with it too.
 - Each percentage is colored by its own value every 20%: session numbers run turquoise → teal → rose → coral → red,
   week numbers lavender → orchid → magenta → pink → red. The instance's two shares use the same scales, so color tells
   you which window each one belongs to.

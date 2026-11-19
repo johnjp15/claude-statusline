@@ -278,6 +278,92 @@ def miss_causes(pc):
     return ', '.join(out)
 
 
+# Account usage from the endpoint Claude Code's /usage screen reads. It has limits the
+# status JSON leaves out (per-model weekly limits such as Fable) and counts usage from
+# claude.ai and Cowork as soon as it happens. It is fetched in the background, at most
+# once a minute, so the status line never waits on the network.
+USAGE_URL = 'https://api.anthropic.com/api/oauth/usage?skip_spend=1'
+USAGE_TTL = 60
+
+
+def oauth_token():
+    """Claude Code's claude.ai access token, or None if absent or expired."""
+    o = get(load(os.path.join(HOME, '.claude', '.credentials.json')), 'claudeAiOauth')
+    if not isinstance(o, dict) and sys.platform == 'darwin':  # macOS keeps it in the Keychain
+        try:
+            r = subprocess.run(['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+                               capture_output=True, timeout=5)
+            o = get(json.loads(r.stdout.decode('utf-8')), 'claudeAiOauth')
+        except (OSError, subprocess.SubprocessError, ValueError):
+            o = None
+    if not isinstance(o, dict) or not o.get('accessToken'):
+        return None
+    if o.get('expiresAt') and num(o['expiresAt']) / 1000 < time.time():
+        return None  # Claude Code refreshes it on its next request
+    return str(o['accessToken'])
+
+
+def epoch(iso):
+    """Unix seconds from the API's ISO 8601 times, or None."""
+    m = re.match(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?$', str(iso or ''))
+    if not m:
+        return None
+    tz = '+00:00' if m.group(2) in (None, 'Z') else m.group(2)
+    # Rounded to the minute: the API's times wobble by a second around the hour.
+    return round(datetime.fromisoformat(m.group(1) + tz).timestamp() / 60) * 60
+
+
+def fetch_usage(path):
+    """Fetch account usage into path: the session and week windows, and per-model weekly limits."""
+    import urllib.request
+    old = load(path)
+    out = old if isinstance(old, dict) else {}
+    out['t'] = int(time.time())  # also on failure, so a failing fetch isn't retried every render
+    tok = oauth_token()
+    if tok:
+        req = urllib.request.Request(USAGE_URL, headers={
+            'Authorization': 'Bearer ' + tok, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'claude-statusline'})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                d = json.loads(r.read().decode('utf-8'))
+            windows = {}
+            for key in ('five_hour', 'seven_day'):
+                w = d.get(key)
+                at = epoch(get(w, 'resets_at'))
+                if isinstance(w, dict) and w.get('utilization') is not None and at:
+                    windows[key] = {'used_percentage': num(w['utilization']), 'resets_at': int(at)}
+            scoped = []
+            for lim in d.get('limits') or []:
+                name = get(lim, 'scope', 'model', 'display_name')
+                at = epoch(get(lim, 'resets_at'))
+                if get(lim, 'kind') == 'weekly_scoped' and name and at:
+                    scoped.append({'name': str(name), 'used_percentage': num(lim.get('percent')), 'resets_at': int(at)})
+            out.update(ok=out['t'], windows=windows, scoped=scoped)
+        except Exception:
+            pass
+    save(path, out)
+
+
+def refresh_usage(path):
+    """Start a background fetch if the saved usage is stale and no fetch is running."""
+    lock = path + '.lock'
+    now = time.time()
+    try:
+        if now - os.path.getmtime(lock) < 30:
+            return
+    except OSError:
+        pass
+    if now - num(get(load(path), 't')) < USAGE_TTL:
+        return
+    try:
+        open(lock, 'w').close()
+        kw = {'creationflags': 0x00000008 | 0x00000200} if os.name == 'nt' else {'start_new_session': True}
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), '--fetch-usage', path],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+    except OSError:
+        pass
+
+
 def render(j):
     parts = []
 
@@ -400,7 +486,8 @@ def render(j):
         obs[key] = {'pct': pct, 'at': at, 't': int(num(e['t'])) if same else now}
         return {'used_percentage': pct, 'resets_at': at, 'observed': obs[key]['t']}
 
-    # Newer of two readings: the later window wins, else the later-observed reading.
+    # Newer of two readings: the later window wins. Within a window usage only rises,
+    # so the higher reading wins, and on a tie the later-observed one.
     def newer(a, b):
         if not live(a):
             return b if live(b) else a
@@ -411,13 +498,25 @@ def render(j):
             return a
         if gap < -60:
             return b
+        pa, pb = num(a['used_percentage']), num(b['used_percentage'])
+        if pa != pb:
+            return a if pa > pb else b
         return b if num(b.get('observed')) > num(a.get('observed')) else a
 
     cache = load(cache_path)
     if not isinstance(cache, dict):
         cache = {}
-    five = newer(reading('five_hour'), cache.get('five_hour'))
-    seven = newer(reading('seven_day'), cache.get('seven_day'))
+    api_path = os.path.join(os.path.dirname(cache_path), 'statusline-api-usage.json')
+    refresh_usage(api_path)
+    api = load(api_path)
+    api = api if isinstance(api, dict) and num(api.get('ok')) > now - 86400 else {}
+
+    def api_reading(key):
+        w = get(api, 'windows', key)
+        return dict(w, observed=int(num(api['ok']))) if isinstance(w, dict) else None
+
+    five = newer(newer(reading('five_hour'), cache.get('five_hour')), api_reading('five_hour'))
+    seven = newer(newer(reading('seven_day'), cache.get('seven_day')), api_reading('seven_day'))
 
     merged = {}
     for key, w in (('five_hour', five), ('seven_day', seven)):
@@ -531,6 +630,12 @@ def render(j):
     if live(seven):
         parts.append(limit(WEEK_ICON, WEEK_RAMP, seven, True, spent(seven_spend), length=7 * 86400))
 
+    # Per-model weekly limits (such as Fable), as a % of that model's own allowance.
+    for lim in api.get('scoped') or []:
+        if isinstance(lim, dict) and live(lim):
+            pct = num(lim['used_percentage'])
+            parts.append(paint('1;97', str(lim.get('name'))) + ' ' + paint(usage_heat(pct, WEEK_RAMP), fixed(pct) + '%'))
+
     sep = paint('90', ' \u2502 ')
     return sep.join(line1) + '\n' + sep.join(parts)
 
@@ -568,6 +673,9 @@ def install():
 def main():
     if '--install' in sys.argv[1:]:
         install()
+        return
+    if sys.argv[1:2] == ['--fetch-usage'] and len(sys.argv) > 2:
+        fetch_usage(sys.argv[2])
         return
     try:
         j = json.loads(sys.stdin.buffer.read().decode('utf-8-sig') or '{}')
